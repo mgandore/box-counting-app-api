@@ -1,12 +1,17 @@
-import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service';
+import { Controller, Get, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { ImageProcessingService as ImageProcessingService } from './app.service';
+import { FileInterceptor } from "@nestjs/platform-express";
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+	public constructor(private readonly imageProcessingService: ImageProcessingService) { }
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
-  }
+	@Post()
+	@UseInterceptors(FileInterceptor("file"))
+	public async uploadFile(@UploadedFile() file: Express.Multer.File): Promise<Express.Multer.File> {
+		if (!file) {
+			throw new Error("No file uploaded")
+		}
+		return this.imageProcessingService.uploadFile(file);
+	}
 }
