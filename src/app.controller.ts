@@ -1,5 +1,5 @@
 import { Controller, Get, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
-import { ImageProcessingService as ImageProcessingService } from './app.service';
+import { ImageProcessingService as ImageProcessingService, ProcessingResponse } from './app.service';
 import { FileInterceptor } from "@nestjs/platform-express";
 
 @Controller()
@@ -8,7 +8,7 @@ export class AppController {
 
 	@Post()
 	@UseInterceptors(FileInterceptor("file"))
-	public async uploadFile(@UploadedFile() file: Express.Multer.File): Promise<Express.Multer.File> {
+	public async uploadFile(@UploadedFile() file: Express.Multer.File): Promise<ProcessingResponse> {
 		if (!file) {
 			throw new Error("No file uploaded")
 		}
