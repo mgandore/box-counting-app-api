@@ -18,8 +18,8 @@ export class ImageProcessingService {
 	private readonly MIN_BOX_SIZE = 1
 
 	public async uploadFile(file: Express.Multer.File): Promise<ProcessingResponse> {
-		// const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
-		// 	.toBuffer({ resolveWithObject: true })
+		const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
+			.toBuffer({ resolveWithObject: true })
 
 		const grayscalePixelArray = new Uint8ClampedArray(BUFFER_SAMPLE)   //(data.buffer);
 		/**
@@ -53,7 +53,6 @@ export class ImageProcessingService {
 		let result: number[][] = this.initializeMatrix(imageMatrix[0].length, imageMatrix.length)
 		for (let y = 0; y < imageMatrix.length; y++) {
 			for (let x = 0; x < imageMatrix[0].length; x++) {
-				console.log()
 				result[y][x] = this.calculateFractalDimension(imageMatrix, y, x)
 			}
 		}
@@ -76,7 +75,7 @@ export class ImageProcessingService {
 				image[i++] = color[2]; // Blue
 			}
 		}
-		const outputFileName: string = `./uploads/output-${Date.now().toString()}.png`
+		const outputFileName: string = `../../box-counting-ui/src/assets/output-${Date.now().toString()}.png`
 		await sharp(image, { raw: { width, height, channels: 3 } })
 			.toFormat('png')
 			.toFile(outputFileName)
@@ -104,7 +103,7 @@ export class ImageProcessingService {
 				for (let j = 0; j < this.NEIGHBORHOOD_SIZE; j += boxSize) {
 					const boxPixels: number[] = this.getBoxPixels(neighborhood, i, j, boxSize)
 					// console.log(`Box left corner (${j},${i})`, "\n", "Box Pixels", boxPixels)
-					if (this.isBoxCountable(boxPixels)) {
+					if (this.isBoxCountable(boxPixels, neighborhood[i][j])) {
 						boxesCount++
 					}
 				}
@@ -121,8 +120,8 @@ export class ImageProcessingService {
 		return fractalDimension;
 	}
 
-	private isBoxCountable(boxPixels: number[]): boolean {
-		return boxPixels.every(pixel => pixel !== 0)
+	private isBoxCountable(boxPixels: number[], mainPixel: number): boolean {
+		return boxPixels.every(pixel => pixel !== mainPixel)
 	}
 
 	/**

@@ -6,7 +6,7 @@ import { MulterModule } from "@nestjs/platform-express";
 @Module({
   imports: [
     MulterModule.register({
-      dest: './uploads',
+      dest: '../data',
     }),
   ],
   controllers: [AppController],
