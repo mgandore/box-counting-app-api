@@ -13,7 +13,7 @@ export interface ProcessingResponse {
 @Injectable()
 export class ImageProcessingService {
 
-	private readonly NEIGHBORHOOD_SIZE = 9; // 81 will be 3^4
+	private readonly NEIGHBORHOOD_SIZE = 81; // 81 will be 3^4
 	private readonly SCALING_FACTOR = 3; // of the boxes
 	private readonly MIN_BOX_SIZE = 1
 
@@ -21,16 +21,15 @@ export class ImageProcessingService {
 		const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
 			.toBuffer({ resolveWithObject: true })
 
-		const grayscalePixelArray = new Uint8ClampedArray(BUFFER_SAMPLE)   //(data.buffer);
+		const grayscalePixelArray = new Uint8ClampedArray(data.buffer)
 		/**
 		 * Each value at [i][j] represents the intensity of the gray color between 0 and 255
 		 * This may be the only information needed to create the 3d plot on the UI sie 
 		 */
-		const grayscaleImageMatrix: number[][] = this.toPixelMatrix(grayscalePixelArray, 10) //info.width
+		const grayscaleImageMatrix: number[][] = this.toPixelMatrix(grayscalePixelArray, info.width);
 		const fractalDimensionMatrix: number[][] = this.getFractalDimensionMatrix(grayscaleImageMatrix);
 		// console.log("FD matrix", fractalDimensionMatrix)
 		const heatmapImageSouceName: string = path.basename(await this.generateHeatmap(fractalDimensionMatrix))
-		this.calculateFractalDimension(grayscaleImageMatrix, 0, 0)
 
 		return <ProcessingResponse>{ heatmapImageSourceName: heatmapImageSouceName, grayscaleData: grayscaleImageMatrix }
 	}
@@ -75,12 +74,12 @@ export class ImageProcessingService {
 				image[i++] = color[2]; // Blue
 			}
 		}
-		const outputFileName: string = `../../box-counting-ui/src/assets/output-${Date.now().toString()}.png`
+		const outputFilePath: string = `../box-counting-app-ui/src/assets/img-${Date.now().toString()}.png`
 		await sharp(image, { raw: { width, height, channels: 3 } })
 			.toFormat('png')
-			.toFile(outputFileName)
+			.toFile(outputFilePath)
 			.catch(() => { throw new Error("Heatmap creation failed") })
-		return outputFileName;
+		return outputFilePath;
 	}
 
 	private getColor(value: number): [number, number, number] {
@@ -93,8 +92,9 @@ export class ImageProcessingService {
 	private calculateFractalDimension(imageMatrix: number[][], centerX: number, centerY: number): number {
 		const data: regression.DataPoint[] = [];
 		const maxBoxSize: number = this.NEIGHBORHOOD_SIZE / 2;
-		const neighborhood: number[][] = this.getNeighborhood(imageMatrix, centerX, centerY, this.NEIGHBORHOOD_SIZE);
+		let neighborhood: number[][] = this.getNeighborhood(imageMatrix, centerX, centerY, this.NEIGHBORHOOD_SIZE);
 		// console.log("Neighborhood", neighborhood)
+		neighborhood = this.binarizeWithOtsu(neighborhood)
 
 		for (let boxSize = this.MIN_BOX_SIZE; boxSize <= maxBoxSize; boxSize *= this.SCALING_FACTOR) {
 			let boxesCount: number = 0;
@@ -120,8 +120,68 @@ export class ImageProcessingService {
 		return fractalDimension;
 	}
 
+	private binarizeWithOtsu(matrix: number[][]): number[][] {
+		// Calculate histogram
+		const histogram = new Array(256).fill(0);
+		const totalPixels = matrix.length * matrix[0].length;
+
+		for (let i = 0; i < matrix.length; i++) {
+			for (let j = 0; j < matrix[0].length; j++) {
+				const pixelValue = matrix[i][j];
+				histogram[pixelValue]++;
+			}
+		}
+
+		// Normalize histogram
+		const normalizedHistogram = histogram.map(count => count / totalPixels);
+
+		// Calculate cumulative sums
+		let sum = 0;
+		const cumulativeSum = normalizedHistogram.map((value) => {
+			sum += value;
+			return sum;
+		});
+
+		// Calculate between-class variance
+		let maxVariance = 0;
+		let threshold = 0;
+
+		for (let t = 0; t < 256; t++) {
+			const backgroundWeight = cumulativeSum[t];
+			const foregroundWeight = 1 - backgroundWeight;
+
+			const backgroundMean = cumulativeSum
+				.slice(0, t + 1)
+				.reduce((sum, value, index) => sum + index * normalizedHistogram[index], 0) / backgroundWeight;
+
+			const foregroundMean = cumulativeSum
+				.slice(t + 1)
+				.reduce((sum, value, index) => sum + index * normalizedHistogram[index], 0) / foregroundWeight;
+
+			const variance = backgroundWeight * foregroundWeight * Math.pow(backgroundMean - foregroundMean, 2);
+
+			if (variance > maxVariance) {
+				maxVariance = variance;
+				threshold = t;
+			}
+		}
+
+		// Binarize the matrix based on the threshold
+		const binarizedMatrix = [];
+
+		for (let i = 0; i < matrix.length; i++) {
+			const row = [];
+			for (let j = 0; j < matrix[0].length; j++) {
+				const pixelValue = matrix[i][j];
+				row.push(pixelValue > threshold ? 255 : 0);
+			}
+			binarizedMatrix.push(row);
+		}
+		return binarizedMatrix
+	}
+
 	private isBoxCountable(boxPixels: number[], mainPixel: number): boolean {
-		return boxPixels.every(pixel => pixel !== mainPixel)
+		return boxPixels.every(pixel => pixel !== 0)
 	}
 
 	/**
