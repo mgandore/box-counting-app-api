@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as regression from 'regression';
 import * as sharp from "sharp";
 import * as path from "node:path"
+import { HEATMAP_COLOR_PALETTE } from "./heatmap-color-palette";
 
 export interface ProcessingResponse {
 	heatmapImageSourceName: string;
@@ -12,10 +13,11 @@ export interface ProcessingResponse {
 @Injectable()
 export class ImageProcessingService {
 
-	private readonly STANDARDIZED_IMAGE_SIZE = 512
+	private readonly STANDARDIZED_IMAGE_SIZE = 257
 	private readonly NEIGHBORHOOD_SIZE = 128;
 	private readonly SCALING_FACTOR = 2;
 	private readonly MIN_BOX_SIZE = 2
+	private readonly THRESHOLD = 128
 
 	public async uploadFile(file: Express.Multer.File): Promise<ProcessingResponse> {
 		const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
@@ -27,12 +29,13 @@ export class ImageProcessingService {
 		 * This may be the only information needed to create the 3d plot on the UI side 
 		 */
 		const grayscaleImageMatrix: number[][] = this.toPixelMatrix(grayscalePixelArray, info.width);
-		const squaredImagePixels = this.squareMatrix(grayscaleImageMatrix)
+		const binarizedMatrix: number[][] = this.binarize(grayscaleImageMatrix)
+		const squaredImagePixels: number[][] = this.squareMatrix(binarizedMatrix)
 		const fractalDimensionMatrix: number[][] = this.getFractalDimensionMatrix(squaredImagePixels);
 		// console.log("FD matrix", fractalDimensionMatrix)
 		const heatmapImageSouceName: string = path.basename(await this.generateHeatmap(fractalDimensionMatrix))
 
-		return <ProcessingResponse>{ heatmapImageSourceName: heatmapImageSouceName, grayscaleData: squaredImagePixels }
+		return <ProcessingResponse>{ heatmapImageSourceName: heatmapImageSouceName, grayscaleData: grayscaleImageMatrix }
 	}
 
 	////////////////////////////////////////////**		 PRIVATE ZONE 		**/////////////////////////////////////////////////////
@@ -89,15 +92,80 @@ export class ImageProcessingService {
 		for (let y = 0; y < imageMatrix.length; y++) {
 			for (let x = 0; x < imageMatrix[0].length; x++) {
 				result[y][x] = this.calculateFractalDimension(imageMatrix, y, x)
+				if (result[y][x] > 2) {
+				}
 			}
 		}
 		return result
 	}
 
 	private async generateHeatmap(matrix: number[][]): Promise<string> {
-		return
+		const height = matrix.length;
+		const width = matrix[0].length;
+		const image = Buffer.alloc(width * height * 3); // 3 bytes per pixel (RGB)
+
+		let i = 0;
+		for (let row = 0; row < height; row++) {
+			for (let col = 0; col < width; col++) {
+				const value = matrix[row][col];
+				const color = this.getColor(value);
+
+				image[i++] = color[0]; // Red
+				image[i++] = color[1]; // Green
+				image[i++] = color[2]; // Blue
+			}
+		}
+		const outputFilePath: string = `../box-counting-app-ui/src/assets/img-${Date.now().toString()}.png`
+		await sharp(image, { raw: { width, height, channels: 3 } })
+			.toFormat('png')
+			.toFile(outputFilePath)
+			.catch(() => { throw new Error("Heatmap creation failed") })
+		return outputFilePath;
 	}
 
+	private getColor(value: number): number[] {
+		if (value === 0) {
+			return HEATMAP_COLOR_PALETTE["0"]
+		} else if (value > 0 && value <= 0.20) {
+			return HEATMAP_COLOR_PALETTE["0.20"]
+		} else if (value > 0.20 && value <= 0.40) {
+			return HEATMAP_COLOR_PALETTE["0.40"]
+		} else if (value > 0.40 && value <= 0.60) {
+			return HEATMAP_COLOR_PALETTE["0.60"]
+		} else if (value > 0.60 && value <= 0.80) {
+			return HEATMAP_COLOR_PALETTE["0.80"]
+		} else if (value > 0.80 && value <= 1) {
+			return HEATMAP_COLOR_PALETTE["1.00"]
+		} else if (value > 1 && value <= 1.20) {
+			return HEATMAP_COLOR_PALETTE["1.20"]
+		} else if (value > 1.20 && value <= 1.40) {
+			return HEATMAP_COLOR_PALETTE["1.40"]
+		} else if (value > 1.40 && value <= 1.60) {
+			return HEATMAP_COLOR_PALETTE["1.60"]
+		} else if (value > 1.60 && value <= 1.80) {
+			return HEATMAP_COLOR_PALETTE["1.80"]
+		} else if (value > 1.80 && value <= 2.) {
+			return HEATMAP_COLOR_PALETTE["2.00"]
+		} else {
+			return HEATMAP_COLOR_PALETTE["2.20"]
+		}
+	}
+
+
+
+	private binarize(imageMatrix: number[][]): number[][] {
+		let matrixClone: number[][] = imageMatrix.map(row => [...row])
+		for (let i = 0; i < imageMatrix.length; i++) {
+			for (let j = 0; j < imageMatrix[0].length; j++) {
+				if (matrixClone[i][j] > this.THRESHOLD) {
+					matrixClone[i][j] = 1
+				} else {
+					matrixClone[i][j] = 0
+				}
+			}
+		}
+		return matrixClone
+	}
 
 
 	private calculateFractalDimension(imageMatrix: number[][], centerX: number, centerY: number): number {
@@ -119,14 +187,14 @@ export class ImageProcessingService {
 				}
 			}
 			const logBoxSize = Math.log(boxSize);
-			const logBoxesCount = Math.log(boxesCount);
-			data.push([logBoxSize, logBoxesCount]);
+			const logBoxesCount = Math.log(boxesCount) === -Infinity ? 0 : Math.log(boxesCount);
+			data.push([logBoxesCount, logBoxSize]);
 			// data.push([boxSize, boxesCount]);
 		}
-		// console.log("Points ", data)
 		// return 0;
 		const result = regression.linear(data);
 		const fractalDimension = result.equation[0];
+		// console.log((`${centerY},${centerX}) = ${-fractalDimension}`), "plot points", data)
 		return -fractalDimension;
 	}
 

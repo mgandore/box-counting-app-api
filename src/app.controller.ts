@@ -11,6 +11,8 @@ export class AppController {
 	public async uploadFile(@UploadedFile() file: Express.Multer.File): Promise<ProcessingResponse> {
 		if (!file) {
 			throw new Error("No file uploaded")
+		} else {
+			console.log("[info] File received")
 		}
 		return this.imageProcessingService.uploadFile(file);
 	}
