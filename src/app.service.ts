@@ -1,41 +1,123 @@
 import { Injectable } from '@nestjs/common';
 import * as regression from 'regression';
 import * as sharp from "sharp";
-import { BUFFER_SAMPLE } from "./buffer.sample";
-import * as path from "node:path"
+import { HEATMAP_COLOR_PALETTE } from "./heatmap-color-palette";
+import * as path from "path";
+import * as fs from "fs"
 
 export interface ProcessingResponse {
 	heatmapImageSourceName: string;
-	grayscaleData: number[][];
+	fractalDimensionMatrix: number[][];
 
 }
 
 @Injectable()
 export class ImageProcessingService {
 
-	private readonly NEIGHBORHOOD_SIZE = 81; // 81 will be 3^4
-	private readonly SCALING_FACTOR = 3; // of the boxes
-	private readonly MIN_BOX_SIZE = 1
+	private readonly STANDARDIZED_IMAGE_SIZE = 1024
+	private readonly NEIGHBORHOOD_SIZE = 32;
+	private readonly SCALING_FACTOR = 2;
+	private readonly MIN_BOX_SIZE = 2
+	private readonly THRESHOLD = 113
 
-	public async uploadFile(file: Express.Multer.File): Promise<ProcessingResponse> {
+	public async processImage(file: Express.Multer.File): Promise<ProcessingResponse> {
 		const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
 			.toBuffer({ resolveWithObject: true })
 
 		const grayscalePixelArray = new Uint8ClampedArray(data.buffer)
 		/**
 		 * Each value at [i][j] represents the intensity of the gray color between 0 and 255
-		 * This may be the only information needed to create the 3d plot on the UI sie 
+		 * This may be the only information needed to create the 3d plot on the UI side 
 		 */
 		const grayscaleImageMatrix: number[][] = this.toPixelMatrix(grayscalePixelArray, info.width);
-		const fractalDimensionMatrix: number[][] = this.getFractalDimensionMatrix(grayscaleImageMatrix);
+		const binarizedMatrix: number[][] = this.binarize(grayscaleImageMatrix)
+		const squaredImagePixels: number[][] = this.squareMatrix(binarizedMatrix)
+		// DEBUG - global fractal dimenison 
+		// const fractalDimension: number = this.calculateFractalDimension(squaredImagePixels)
+		// console.log("Global fractal dimension", fractalDimension)
+		const fractalDimensionMatrix: number[][] = this.getFractalDimensionMatrix(squaredImagePixels);
+		this.writeFractalDimensionMatrix(fractalDimensionMatrix)
 		// console.log("FD matrix", fractalDimensionMatrix)
 		const heatmapImageSouceName: string = path.basename(await this.generateHeatmap(fractalDimensionMatrix))
 
-		return <ProcessingResponse>{ heatmapImageSourceName: heatmapImageSouceName, grayscaleData: grayscaleImageMatrix }
+		return <ProcessingResponse>{ heatmapImageSourceName: heatmapImageSouceName, fractalDimensionMatrix: fractalDimensionMatrix }
 	}
 
 	////////////////////////////////////////////**		 PRIVATE ZONE 		**/////////////////////////////////////////////////////
+	// DEBUG - global fractal dimension
+	private calculateFractalDimension(imageMatrix: number[][]): number {
+		const data: regression.DataPoint[] = [];
+		const maxBoxSize: number = 64;
 
+		for (let boxSize = this.MIN_BOX_SIZE; boxSize < maxBoxSize; boxSize *= this.SCALING_FACTOR) {
+			let boxesCount: number = 0;
+			for (let i = 0; i < this.STANDARDIZED_IMAGE_SIZE; i += boxSize) {
+				for (let j = 0; j < this.STANDARDIZED_IMAGE_SIZE; j += boxSize) {
+					const boxPixels: number[] = this.getBoxPixels(imageMatrix, i, j, boxSize)
+					if (this.isBoxCountable(boxPixels, imageMatrix[i][j])) {
+						boxesCount++
+					}
+				}
+			}
+			const logBoxSize = Math.log(boxSize);
+			const logBoxesCount = Math.log(boxesCount) === -Infinity ? -0 : Math.log(boxesCount);
+			data.push([logBoxSize, logBoxesCount]);
+		}
+		console.log("Points on the loglog graph ", data)
+		const result = regression.linear(data);
+		const fractalDimension = result.equation[0];
+		return -fractalDimension;
+	}
+
+	private writeFractalDimensionMatrix(matrix: number[][]): void {
+		const filename = 'matrice.txt';
+
+		const matrixString = matrix.map(row => row.join(' ')).join('\n');
+
+		try {
+			fs.writeFileSync(filename, matrixString);
+			console.log('Matricea a fost scrisă în fișierul', filename);
+		} catch (err) {
+			console.error('A apărut o eroare la scrierea fișierului:', err);
+		}
+	}
+
+
+	/**
+	 * 
+	 * @param pixelMatrix 
+	 * @returns a MxM matrix
+	 */
+	private squareMatrix(pixelMatrix: number[][]): number[][] {
+		let matrixClone: number[][] = pixelMatrix.map(row => [...row])
+		//HEIGHT
+		if (pixelMatrix.length > this.STANDARDIZED_IMAGE_SIZE) {
+			matrixClone = pixelMatrix.slice(0, this.STANDARDIZED_IMAGE_SIZE)
+		} else {
+			matrixClone = this.fillTheRows(pixelMatrix)
+		}
+		//WIDTH
+		if (pixelMatrix[0].length > this.STANDARDIZED_IMAGE_SIZE) {
+			matrixClone = matrixClone.map(row => row.slice(0, this.STANDARDIZED_IMAGE_SIZE))
+		} else {
+			let rowLength = pixelMatrix[0].length
+			let missingRowLength = this.STANDARDIZED_IMAGE_SIZE - rowLength
+			matrixClone = matrixClone.map(row => row.concat(new Array(missingRowLength).fill(0)))
+		}
+		return matrixClone
+	}
+
+	private fillTheRows(pixelMatrix: number[][]): number[][] {
+		const rowLength: number = pixelMatrix[0].length
+		const currentRowsCount: number = pixelMatrix.length
+		let matrixClone: number[][] = pixelMatrix.map(row => [...row])
+		let neededRowsCount: number = this.STANDARDIZED_IMAGE_SIZE - currentRowsCount
+		while (neededRowsCount > 0) {
+			matrixClone.push(new Array(rowLength).fill(0))
+			neededRowsCount--;
+		}
+		return matrixClone
+	}
 
 	private toPixelMatrix(pixelArray: Uint8ClampedArray, width: number): number[][] {
 		let matrix: number[][] = [];
@@ -52,7 +134,7 @@ export class ImageProcessingService {
 		let result: number[][] = this.initializeMatrix(imageMatrix[0].length, imageMatrix.length)
 		for (let y = 0; y < imageMatrix.length; y++) {
 			for (let x = 0; x < imageMatrix[0].length; x++) {
-				result[y][x] = this.calculateFractalDimension(imageMatrix, y, x)
+				result[y][x] = this.calculateLocalFractalDimension(imageMatrix, y, x)
 			}
 		}
 		return result
@@ -68,7 +150,6 @@ export class ImageProcessingService {
 			for (let col = 0; col < width; col++) {
 				const value = matrix[row][col];
 				const color = this.getColor(value);
-
 				image[i++] = color[0]; // Red
 				image[i++] = color[1]; // Green
 				image[i++] = color[2]; // Blue
@@ -82,106 +163,95 @@ export class ImageProcessingService {
 		return outputFilePath;
 	}
 
-	private getColor(value: number): [number, number, number] {
-		const red = Math.round(255 * value);
-		const blue = Math.round(255 * (1 - value));
-		const green = 0;
-		return [red, green, blue];
+	private getColor(value: number): number[] {
+		if (value === 0) {
+			return HEATMAP_COLOR_PALETTE["0"]
+		} else if (value >= 0.10 && value <= 0.20) {
+			return HEATMAP_COLOR_PALETTE["0.10"]
+		} else if (value > 0.20 && value <= 0.30) {
+			return HEATMAP_COLOR_PALETTE["0.20"]
+		} else if (value > 0.30 && value <= 0.40) {
+			return HEATMAP_COLOR_PALETTE["0.30"]
+		} else if (value > 0.40 && value <= 0.50) {
+			return HEATMAP_COLOR_PALETTE["0.40"]
+		} else if (value > 0.50 && value <= 0.60) {
+			return HEATMAP_COLOR_PALETTE["0.50"]
+		} else if (value > 0.60 && value <= 0.70) {
+			return HEATMAP_COLOR_PALETTE["0.60"]
+		} else if (value > 0.70 && value <= 0.80) {
+			return HEATMAP_COLOR_PALETTE["0.70"]
+		} else if (value > 0.80 && value <= 0.90) {
+			return HEATMAP_COLOR_PALETTE["0.80"]
+		} else if (value > 0.90 && value < 1.0) {
+			return HEATMAP_COLOR_PALETTE["1.90"]
+		} else if (value >= 1.0 && value <= 1.10) {
+			return HEATMAP_COLOR_PALETTE["1.10"]
+		} else if (value > 1.10 && value <= 1.20) {
+			return HEATMAP_COLOR_PALETTE["1.20"]
+		} else if (value > 1.20 && value <= 1.30) {
+			return HEATMAP_COLOR_PALETTE["1.30"]
+		} else if (value > 1.30 && value <= 1.40) {
+			return HEATMAP_COLOR_PALETTE["1.40"]
+		} else if (value > 1.40 && value <= 1.50) {
+			return HEATMAP_COLOR_PALETTE["1.50"]
+		} else if (value > 1.50 && value <= 1.60) {
+			return HEATMAP_COLOR_PALETTE["1.60"]
+		} else if (value > 1.60 && value <= 1.70) {
+			return HEATMAP_COLOR_PALETTE["1.70"]
+		} else if (value > 1.70 && value <= 1.80) {
+			return HEATMAP_COLOR_PALETTE["1.80"]
+		} else if (value > 1.80 && value < 1.90) {
+			return HEATMAP_COLOR_PALETTE["1.90"]
+		} else {
+			return HEATMAP_COLOR_PALETTE["2.00"]
+		}
 	}
 
-	private calculateFractalDimension(imageMatrix: number[][], centerX: number, centerY: number): number {
+
+
+	private binarize(imageMatrix: number[][]): number[][] {
+		let matrixClone: number[][] = imageMatrix.map(row => [...row])
+		for (let i = 0; i < imageMatrix.length; i++) {
+			for (let j = 0; j < imageMatrix[0].length; j++) {
+				if (matrixClone[i][j] > this.THRESHOLD) {
+					matrixClone[i][j] = 1
+				} else {
+					matrixClone[i][j] = 0
+				}
+			}
+		}
+		return matrixClone
+	}
+
+
+	private calculateLocalFractalDimension(imageMatrix: number[][], centerX: number, centerY: number): number {
 		const data: regression.DataPoint[] = [];
 		const maxBoxSize: number = this.NEIGHBORHOOD_SIZE / 2;
 		let neighborhood: number[][] = this.getNeighborhood(imageMatrix, centerX, centerY, this.NEIGHBORHOOD_SIZE);
-		// console.log("Neighborhood", neighborhood)
-		neighborhood = this.binarizeWithOtsu(neighborhood)
 
-		for (let boxSize = this.MIN_BOX_SIZE; boxSize <= maxBoxSize; boxSize *= this.SCALING_FACTOR) {
+		for (let boxSize = this.MIN_BOX_SIZE; boxSize < maxBoxSize; boxSize *= this.SCALING_FACTOR) {
 			let boxesCount: number = 0;
-			// console.log(`BOX SIZE: ${boxSize}`)
 			for (let i = 0; i < this.NEIGHBORHOOD_SIZE; i += boxSize) {
 				for (let j = 0; j < this.NEIGHBORHOOD_SIZE; j += boxSize) {
 					const boxPixels: number[] = this.getBoxPixels(neighborhood, i, j, boxSize)
-					// console.log(`Box left corner (${j},${i})`, "\n", "Box Pixels", boxPixels)
 					if (this.isBoxCountable(boxPixels, neighborhood[i][j])) {
 						boxesCount++
 					}
 				}
 			}
 			const logBoxSize = Math.log(boxSize);
-			const logBoxesCount = Math.log(boxesCount);
+			const logBoxesCount = Math.log(boxesCount) === -Infinity ? 0 : Math.log(boxesCount);
 			data.push([logBoxSize, logBoxesCount]);
-			// data.push([boxSize, boxesCount]);
 		}
-		// console.log("Points ", data)
-		// return 0;
 		const result = regression.linear(data);
 		const fractalDimension = result.equation[0];
-		return fractalDimension;
+		// console.log((`${centerY},${centerX}) = ${-fractalDimension}`), "plot points", data)
+		return -fractalDimension;
 	}
 
-	private binarizeWithOtsu(matrix: number[][]): number[][] {
-		// Calculate histogram
-		const histogram = new Array(256).fill(0);
-		const totalPixels = matrix.length * matrix[0].length;
-
-		for (let i = 0; i < matrix.length; i++) {
-			for (let j = 0; j < matrix[0].length; j++) {
-				const pixelValue = matrix[i][j];
-				histogram[pixelValue]++;
-			}
-		}
-
-		// Normalize histogram
-		const normalizedHistogram = histogram.map(count => count / totalPixels);
-
-		// Calculate cumulative sums
-		let sum = 0;
-		const cumulativeSum = normalizedHistogram.map((value) => {
-			sum += value;
-			return sum;
-		});
-
-		// Calculate between-class variance
-		let maxVariance = 0;
-		let threshold = 0;
-
-		for (let t = 0; t < 256; t++) {
-			const backgroundWeight = cumulativeSum[t];
-			const foregroundWeight = 1 - backgroundWeight;
-
-			const backgroundMean = cumulativeSum
-				.slice(0, t + 1)
-				.reduce((sum, value, index) => sum + index * normalizedHistogram[index], 0) / backgroundWeight;
-
-			const foregroundMean = cumulativeSum
-				.slice(t + 1)
-				.reduce((sum, value, index) => sum + index * normalizedHistogram[index], 0) / foregroundWeight;
-
-			const variance = backgroundWeight * foregroundWeight * Math.pow(backgroundMean - foregroundMean, 2);
-
-			if (variance > maxVariance) {
-				maxVariance = variance;
-				threshold = t;
-			}
-		}
-
-		// Binarize the matrix based on the threshold
-		const binarizedMatrix = [];
-
-		for (let i = 0; i < matrix.length; i++) {
-			const row = [];
-			for (let j = 0; j < matrix[0].length; j++) {
-				const pixelValue = matrix[i][j];
-				row.push(pixelValue > threshold ? 255 : 0);
-			}
-			binarizedMatrix.push(row);
-		}
-		return binarizedMatrix
-	}
 
 	private isBoxCountable(boxPixels: number[], mainPixel: number): boolean {
-		return boxPixels.every(pixel => pixel !== 0)
+		return boxPixels.some(pixel => pixel !== 0)
 	}
 
 	/**
@@ -192,9 +262,9 @@ export class ImageProcessingService {
 	private getNeighborhood(imageMatrix: number[][], x: number, y: number, neighborhoodSize: number): number[][] {
 		const neighborhood = [];
 		let halfSize = Math.floor(neighborhoodSize / 2);
-		for (let i = x - halfSize; i <= x + halfSize; i++) {
+		for (let i = x - halfSize; i <= x + halfSize - 1; i++) {
 			const row = [];
-			for (let j = y - halfSize; j <= y + halfSize; j++) {
+			for (let j = y - halfSize; j <= y + halfSize - 1; j++) {
 				if (i < 0 || j < 0 || i >= imageMatrix.length || j >= imageMatrix[0].length) {
 					row.push(0)
 				} else {
