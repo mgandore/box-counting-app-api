@@ -14,6 +14,6 @@ export class AppController {
 		} else {
 			console.log("[info] File received")
 		}
-		return this.imageProcessingService.uploadFile(file);
+		return this.imageProcessingService.processImage(file);
 	}
 }
