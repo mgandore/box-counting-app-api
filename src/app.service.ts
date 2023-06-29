@@ -14,11 +14,11 @@ export interface ProcessingResponse {
 @Injectable()
 export class ImageProcessingService {
 
-	private readonly STANDARDIZED_IMAGE_SIZE = 1024
-	private readonly NEIGHBORHOOD_SIZE = 32;
+	private readonly STANDARDIZED_IMAGE_SIZE = 512
+	private readonly NEIGHBORHOOD_SIZE = 16;
 	private readonly SCALING_FACTOR = 2;
-	private readonly MIN_BOX_SIZE = 2
-	private readonly THRESHOLD = 113
+	private readonly MIN_BOX_SIZE = 1
+	private readonly THRESHOLD = 69
 
 	public async processImage(file: Express.Multer.File): Promise<ProcessingResponse> {
 		const { data, info } = await sharp(`${file.destination}/${file.filename}`).greyscale().raw()
@@ -36,7 +36,6 @@ export class ImageProcessingService {
 		// const fractalDimension: number = this.calculateFractalDimension(squaredImagePixels)
 		// console.log("Global fractal dimension", fractalDimension)
 		const fractalDimensionMatrix: number[][] = this.getFractalDimensionMatrix(squaredImagePixels);
-		this.writeFractalDimensionMatrix(fractalDimensionMatrix)
 		// console.log("FD matrix", fractalDimensionMatrix)
 		const heatmapImageSouceName: string = path.basename(await this.generateHeatmap(fractalDimensionMatrix))
 
@@ -45,40 +44,38 @@ export class ImageProcessingService {
 
 	////////////////////////////////////////////**		 PRIVATE ZONE 		**/////////////////////////////////////////////////////
 	// DEBUG - global fractal dimension
-	private calculateFractalDimension(imageMatrix: number[][]): number {
-		const data: regression.DataPoint[] = [];
-		const maxBoxSize: number = 64;
+	// private calculateFractalDimension(imageMatrix: number[][]): number {
+	// 	const data: regression.DataPoint[] = [];
+	// 	const maxBoxSize: number = 64;
 
-		for (let boxSize = this.MIN_BOX_SIZE; boxSize < maxBoxSize; boxSize *= this.SCALING_FACTOR) {
-			let boxesCount: number = 0;
-			for (let i = 0; i < this.STANDARDIZED_IMAGE_SIZE; i += boxSize) {
-				for (let j = 0; j < this.STANDARDIZED_IMAGE_SIZE; j += boxSize) {
-					const boxPixels: number[] = this.getBoxPixels(imageMatrix, i, j, boxSize)
-					if (this.isBoxCountable(boxPixels, imageMatrix[i][j])) {
-						boxesCount++
-					}
-				}
-			}
-			const logBoxSize = Math.log(boxSize);
-			const logBoxesCount = Math.log(boxesCount) === -Infinity ? -0 : Math.log(boxesCount);
-			data.push([logBoxSize, logBoxesCount]);
-		}
-		console.log("Points on the loglog graph ", data)
-		const result = regression.linear(data);
-		const fractalDimension = result.equation[0];
-		return -fractalDimension;
-	}
+	// 	for (let boxSize = this.MIN_BOX_SIZE; boxSize < maxBoxSize; boxSize *= this.SCALING_FACTOR) {
+	// 		let boxesCount: number = 0;
+	// 		for (let i = 0; i < this.STANDARDIZED_IMAGE_SIZE; i += boxSize) {
+	// 			for (let j = 0; j < this.STANDARDIZED_IMAGE_SIZE; j += boxSize) {
+	// 				const boxPixels: number[] = this.getBoxPixels(imageMatrix, i, j, boxSize)
+	// 				if (this.isBoxCountable(boxPixels, imageMatrix[i][j])) {
+	// 					boxesCount++
+	// 				}
+	// 			}
+	// 		}
+	// 		const logBoxSize = Math.log(boxSize);
+	// 		const logBoxesCount = Math.log(boxesCount) === -Infinity ? -0 : Math.log(boxesCount);
+	// 		data.push([logBoxSize, logBoxesCount]);
+	// 	}
+	// 	console.log("[info] Points on the loglog graph ", data)
+	// 	const result = regression.linear(data);
+	// 	const fractalDimension = result.equation[0];
+	// 	return -fractalDimension;
+	// }
 
-	private writeFractalDimensionMatrix(matrix: number[][]): void {
-		const filename = 'matrice.txt';
-
+	private writeFractalDimensionMatrix(matrix: number[][], date: string): void {
+		const filename = `matrice-${date}.txt`;
 		const matrixString = matrix.map(row => row.join(' ')).join('\n');
-
 		try {
 			fs.writeFileSync(filename, matrixString);
-			console.log('Matricea a fost scrisă în fișierul', filename);
+			console.log("[info] Matrix created", filename);
 		} catch (err) {
-			console.error('A apărut o eroare la scrierea fișierului:', err);
+			console.error("[error] Error creating the matrix file", err);
 		}
 	}
 
@@ -155,7 +152,9 @@ export class ImageProcessingService {
 				image[i++] = color[2]; // Blue
 			}
 		}
-		const outputFilePath: string = `../box-counting-app-ui/src/assets/img-${Date.now().toString()}.png`
+		const date: string = Date.now().toString()
+		const outputFilePath: string = `../box-counting-app-ui/src/assets/img-${date}.png`
+		this.writeFractalDimensionMatrix(matrix, date)
 		await sharp(image, { raw: { width, height, channels: 3 } })
 			.toFormat('png')
 			.toFile(outputFilePath)
